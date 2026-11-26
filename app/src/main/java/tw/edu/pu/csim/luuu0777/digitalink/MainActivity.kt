@@ -1,5 +1,7 @@
 package tw.edu.pu.csim.luuu0777.digitalink
 
+import android.icu.text.Transliterator
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -19,6 +21,8 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -35,6 +39,9 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import com.google.mlkit.common.model.DownloadConditions
 import com.google.mlkit.common.model.RemoteModelManager
+import com.google.mlkit.nl.translate.TranslateLanguage
+import com.google.mlkit.nl.translate.Translation
+import com.google.mlkit.nl.translate.TranslatorOptions
 import com.google.mlkit.vision.digitalink.recognition.DigitalInkRecognition
 import com.google.mlkit.vision.digitalink.recognition.DigitalInkRecognitionModel
 import com.google.mlkit.vision.digitalink.recognition.DigitalInkRecognitionModelIdentifier
@@ -77,16 +84,19 @@ fun Doodle(modifier: Modifier = Modifier) {
 
          */
 
-        mutableStateOf(
-            Path().apply {
-            moveTo(100f, 100f)
-            lineTo(100f, 500f)
-            lineTo(400f, 500f)
+        mutableStateOf(Path())
+
+            /*.apply {
+                moveTo(100f, 100f)
+                lineTo(100f, 500f)
+                lineTo(400f, 500f)
                 lineTo(400f, 600f)
-            close()
-        }
+                close()
+            }
         )
-        }
+
+             */
+    }
 
     // ML Kit 墨水與筆劃收集器 ----------
     // inkBuilder 負責收集「整頁的全部筆劃」（把多個單一筆劃組合在一起）。
@@ -105,7 +115,7 @@ fun Doodle(modifier: Modifier = Modifier) {
     // 取得語言辨識碼
     val modelIdentifier = remember {
         try {
-            DigitalInkRecognitionModelIdentifier.fromLanguageTag("zh-Hant")
+            DigitalInkRecognitionModelIdentifier.fromLanguageTag("zxx-Zsym-x-autodraw")
         } catch (e: Exception) {
             null
         }
@@ -119,6 +129,37 @@ fun Doodle(modifier: Modifier = Modifier) {
     // 建立手寫辨識引擎
     val recognizer = remember(model) {
         model?.let { DigitalInkRecognition.getClient(DigitalInkRecognizerOptions.builder(it).build()) }
+    }
+
+    val translator = remember {
+        Translation.getClient(
+            TranslatorOptions.Builder()
+                .setSourceLanguage(TranslateLanguage.ENGLISH)
+                .setTargetLanguage(TranslateLanguage.CHINESE)
+                .build()
+        )
+    }
+    DisposableEffect(Unit) {
+        onDispose { translator.close() }
+    }
+
+    // 英文翻成中文後顯示
+    fun showChinese(english: String) {
+        translator.downloadModelIfNeeded()
+            .addOnSuccessListener {
+                translator.translate(english)
+                    .addOnSuccessListener { chinese ->
+                        // Android 10 以上可把簡體轉成繁體
+                        val text = if (Build.VERSION.SDK_INT >= 29) {
+                            Transliterator.getInstance("Hans-Hant").transliterate(chinese)
+                        } else {
+                            chinese
+                        }
+                        recognizedText = "辨識結果: $text"
+                    }
+                    .addOnFailureListener { recognizedText = "翻譯失敗: ${it.message}" }
+            }
+            .addOnFailureListener { recognizedText = "翻譯模型下載失敗: ${it.message}" }
     }
 
 
@@ -203,32 +244,30 @@ fun Doodle(modifier: Modifier = Modifier) {
                         return@Button
                     }
 
-                    recognizedText = "正在處理中..."
-
-                    recognizer?.recognize(ink)
-                        ?.addOnSuccessListener { result ->
-                            if (result.candidates.isNotEmpty()) {
-                                val topCandidate = result.candidates[0].text
-                                recognizedText = "辨識結果: $topCandidate"
-                            } else {
-                                recognizedText = "辨識結果: 無法辨識"
-                            }
-                        }
-                        ?.addOnFailureListener { recognizedText = "辨識失敗: ${it.message}" }
-
-
-                    if (model != null) {
-                        RemoteModelManager.getInstance()
-                            .download(model, DownloadConditions.Builder().build())
-                            .addOnSuccessListener {
-
-                            }
-                            .addOnFailureListener { recognizedText = "模型下載失敗" }
-                    } else {
+                    if (model == null) {
                         recognizedText = "模型建立失敗"
+                        return@Button
                     }
 
-                }) {
+                    recognizedText = "正在處理中..."
+
+                    RemoteModelManager.getInstance()
+                        .download(model, DownloadConditions.Builder().build())
+                        .addOnSuccessListener {
+                            recognizer?.recognize(ink)
+                                ?.addOnSuccessListener { result ->
+                                    val english = result.candidates.firstOrNull()?.text
+                                    if (english != null) {
+                                        showChinese(english)
+                                    } else {
+                                        recognizedText = "無法辨識"
+                                    }
+                                }
+                                ?.addOnFailureListener { recognizedText = "辨識失敗: ${it.message}" }
+                        }
+                        .addOnFailureListener { recognizedText = "模型下載失敗: ${it.message}" }
+                }
+            ) {
                 Text("開始辨識")
             }
             Spacer(modifier = Modifier.width(16.dp))
